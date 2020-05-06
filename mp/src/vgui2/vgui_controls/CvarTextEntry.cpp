@@ -40,6 +40,11 @@ void CvarTextEntry::SetPrecision(int precision)
     {
         Q_snprintf(m_szNumberFormat, sizeof(m_szNumberFormat), "%s.%i%s", "%", precision, "f");
     }
+    if (m_cvarRef.GetMin(m_fLowestPossibleVal) && m_fLowestPossibleVal)
+    {
+        // min above 0 needs to be limited to a set precision
+        m_fLowestPossibleVal = 1 / powf(10, precision); 
+    }
 }
 
 void CvarTextEntry::ApplySchemeSettings(IScheme *pScheme)
@@ -79,26 +84,16 @@ void CvarTextEntry::SetText(const char* text)
 
     if (GetAllowNumericInputOnly())
     {
+        char newText[MAX_CVAR_TEXT];
         if (m_iPrecision)
         {
-            if (text[strnlen(text, MAX_CVAR_TEXT) - 1] == '.')
-            {
-                // trying to enter a decimal number so set the text normally
-                BaseClass::SetText(text);
-            }
-            else // not in the middle of setting a decimal number
-            {
-                char newText[MAX_CVAR_TEXT];
-                Q_snprintf(newText, MAX_CVAR_TEXT, m_szNumberFormat, atof(text));
-                BaseClass::SetText(newText);
-            }
+            Q_snprintf(newText, MAX_CVAR_TEXT, m_szNumberFormat, atof(text));
         }
         else
         {
-            char newText[MAX_CVAR_TEXT];
             Q_snprintf(newText, MAX_CVAR_TEXT, "%i", atoi(text));
-            BaseClass::SetText(newText);
         }
+        BaseClass::SetText(newText);
     }
     else
     {
@@ -126,10 +121,16 @@ void CvarTextEntry::ApplyChanges()
     char szText[MAX_CVAR_TEXT];
     GetText(szText, MAX_CVAR_TEXT);
 
-    if (!szText[0])
+    if (!szText[0] || !ShouldUpdate(szText))
         return;
 
     m_cvarRef.SetValue(szText);
+
+    // correct to lowest possible value according to the set precision
+    if (GetAllowNumericInputOnly() && m_fLowestPossibleVal > m_cvarRef.GetFloat())
+    {
+        m_cvarRef.SetValue(m_fLowestPossibleVal);
+    }
 
     Q_strncpy(m_pszStartValue, szText, sizeof(m_pszStartValue));
 }
@@ -178,6 +179,18 @@ bool CvarTextEntry::HasBeenModified()
 bool CvarTextEntry::HasBeenModifiedExternally() const
 {
     return m_cvarRef.IsValid() && stricmp(m_cvarRef.GetString(), m_pszStartValue) != 0;
+}
+
+bool CvarTextEntry::ShouldUpdate(const char *szText)
+{
+    int strLength = strnlen(szText, MAX_CVAR_TEXT);
+    bool isEqToZero = atof(szText) == 0.0f,               // current text value is 0, 0.0, 0.00, etc
+         lastNumIsZero = szText[strLength - 1] == '0',    // last number is zero -> hasn't finished inputting
+         isEndDot = szText[strLength - 1] == '.',         // dont reset if end is a dot (inputing decimal)
+         isJustZero = szText[0] == '0' && strLength == 1, // 1 character and it's 0
+         resetOnZero = m_fLowestPossibleVal == 0.0f;      // if just a 0, dont reset if lowest value is >0
+
+    return (resetOnZero && isJustZero) || !((lastNumIsZero && isEqToZero) || isEndDot);
 }
 
 void CvarTextEntry::OnTextChanged()
